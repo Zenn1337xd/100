@@ -1,7 +1,7 @@
 -- =======================================================
--- Kevan Hub | Steal an Egg (Chilli Edition + AntiGuard)
+-- Kevan Hub | Steal an Egg (Chilli Edition v3)
 -- Owned by kevan#9999
--- Key: KevanGen | AntiGuard (Sleep NPC/Boss) + Live Steal Radar
+-- Key: KevanGen | True Boss Freeze + Clean Rare-Only Radar
 -- =======================================================
 
 local Players = game:GetService("Players")
@@ -67,7 +67,7 @@ local function loadMainHub()
         end
     end
 
-    -- Nest / Base Position
+    -- Nest / Safe Zone Base
     local cachedBase = nil
     local function getMyBasePos()
         if cachedBase then return cachedBase end
@@ -104,49 +104,96 @@ local function loadMainHub()
     end
 
     -- =======================================================
-    -- ANTIGUARD (SLEEP GUARDS & FREEZE BOSSES)
+    -- HARDENED ANTIGUARD (FREEZE BOSSES & PUT TO SLEEP)
     -- =======================================================
     local antiGuardEnabled = false
+    local antiGuardConn = nil
 
-    local function sleepGuards()
-        for _, npc in ipairs(workspace:GetDescendants()) do
-            if npc:IsA("Humanoid") and not Players:GetPlayerFromCharacter(npc.Parent) then
-                pcall(function()
-                    local model = npc.Parent
-                    npc.PlatformStand = true
-                    npc.WalkSpeed = 0
+    local function freezeAllBossesAndGuards()
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("Humanoid") then
+                local model = obj.Parent
+                if model and not Players:GetPlayerFromCharacter(model) then
+                    pcall(function()
+                        obj.WalkSpeed = 0
+                        obj.PlatformStand = true
+                        obj.AutoRotate = false
 
-                    local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChildWhichIsA("BasePart")
-                    if hrp then
-                        hrp.Anchored = true
-                        hrp.AssemblyLinearVelocity = Vector3.zero
-                    end
-
-                    for _, part in ipairs(model:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            local pName = string.lower(part.Name)
-                            if string.find(pName, "hitbox") or string.find(pName, "attack") or string.find(pName, "damage") then
-                                part.CanTouch = false
+                        -- Stop any attack/chase animation tracks
+                        local animator = obj:FindFirstChildWhichIsA("Animator")
+                        if animator then
+                            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                                track:Stop(0)
                             end
                         end
-                    end
-                end)
+
+                        -- Disable scripts controlling the boss
+                        for _, sc in ipairs(model:GetChildren()) do
+                            if sc:IsA("Script") or sc:IsA("LocalScript") then
+                                sc.Enabled = false
+                            end
+                        end
+
+                        -- Anchor all parts and neutralize hitboxes
+                        for _, part in ipairs(model:GetDescendants()) do
+                            if part:IsA("BasePart") then
+                                part.Anchored = true
+                                part.AssemblyLinearVelocity = Vector3.zero
+                                part.AssemblyAngularVelocity = Vector3.zero
+
+                                local pName = string.lower(part.Name)
+                                if string.find(pName, "hitbox") 
+                                   or string.find(pName, "attack") 
+                                   or string.find(pName, "damage") 
+                                   or string.find(pName, "sight") 
+                                   or string.find(pName, "aggro") 
+                                then
+                                    part.CanTouch = false
+                                    part.CanQuery = false
+                                end
+                            end
+                        end
+                    end)
+                end
             end
         end
     end
 
-    -- AntiGuard Monitor Loop
-    task.spawn(function()
-        while true do
-            if antiGuardEnabled then
-                sleepGuards()
-            end
-            task.wait(1)
+    local function toggleAntiGuard(state)
+        antiGuardEnabled = state
+        if antiGuardConn then
+            antiGuardConn:Disconnect()
+            antiGuardConn = nil
         end
-    end)
+
+        if state then
+            freezeAllBossesAndGuards()
+            -- Lock bosses every 0.3s so newly spawned guards instantly freeze
+            antiGuardConn = RunService.Heartbeat:Connect(function()
+                freezeAllBossesAndGuards()
+            end)
+            notify("AntiGuard Active", "Bosses & Guards are now sleeping / frozen!")
+        else
+            -- Restore boss movement if toggled off
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("Humanoid") and not Players:GetPlayerFromCharacter(obj.Parent) then
+                    pcall(function()
+                        obj.PlatformStand = false
+                        obj.WalkSpeed = 16
+                        for _, p in ipairs(obj.Parent:GetDescendants()) do
+                            if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                                p.Anchored = false
+                            end
+                        end
+                    end)
+                end
+            end
+            notify("AntiGuard Disabled", "Guards restored.")
+        end
+    end
 
     -- =======================================================
-    -- EGG DETECTOR & MULTI-ZONE SCANNER
+    -- CLEAN RARE-ONLY EGG SCANNER (NO MESHES / NO COMMON)
     -- =======================================================
     local RARITY_RANKS = {
         ["secret"]    = {Tier = "Secret", Rank = 10, Color = Color3.fromRGB(0, 255, 210)},
@@ -156,52 +203,68 @@ local function loadMainHub()
         ["mythic"]    = {Tier = "Mythic", Rank = 6, Color = Color3.fromRGB(180, 70, 255)},
         ["legendary"] = {Tier = "Legendary", Rank = 5, Color = Color3.fromRGB(255, 160, 20)},
         ["epic"]      = {Tier = "Epic", Rank = 4, Color = Color3.fromRGB(255, 50, 50)},
-        ["rare"]      = {Tier = "Rare", Rank = 3, Color = Color3.fromRGB(50, 150, 255)},
-        ["common"]    = {Tier = "Common", Rank = 1, Color = Color3.fromRGB(200, 200, 200)}
+        ["rare"]      = {Tier = "Rare", Rank = 3, Color = Color3.fromRGB(50, 150, 255)}
     }
 
-    local BLACKLIST = {"safe zone", "shop", "nest", "stand", "leaderboard", "ui", "zone"}
+    -- Blacklist internal mesh parts, bounds, and terrain nodes
+    local JUNK_FILTER = {
+        "mesh", "plane", "cube", "spot", "point", "fill", "bound", "batch",
+        "stand", "nest", "shop", "safe zone", "leaderboard", "ui", "zone",
+        "firstarea", "floor", "wall", "path", "grass", "decor", "door"
+    }
 
-    local function isBlacklisted(str)
+    local function isJunkName(str)
         local lower = string.lower(str)
-        for _, b in ipairs(BLACKLIST) do
-            if string.find(lower, b) then return true end
+        for _, junk in ipairs(JUNK_FILTER) do
+            if string.find(lower, junk) then
+                return true
+            end
         end
         return false
     end
 
     local function inspectEgg(obj)
-        if isBlacklisted(obj.Name) then return nil end
+        if isJunkName(obj.Name) then return nil end
 
         local rawName = obj.Name
         local lowerName = string.lower(rawName)
-        local isEgg = string.find(lowerName, "egg")
+        local isRealEgg = false
+
+        -- Must have a valid ProximityPrompt to steal
         local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
         local promptText = prompt and string.lower((prompt.ObjectText or "") .. " " .. (prompt.ActionText or "")) or ""
 
-        if not isEgg and string.find(promptText, "egg") then
-            isEgg = true
-            rawName = prompt.ObjectText ~= "" and prompt.ObjectText or rawName
-            lowerName = string.lower(rawName)
+        if prompt and (string.find(promptText, "egg") or string.find(promptText, "steal")) then
+            isRealEgg = true
+            if prompt.ObjectText and prompt.ObjectText ~= "" and not isJunkName(prompt.ObjectText) then
+                rawName = prompt.ObjectText
+                lowerName = string.lower(rawName)
+            end
         end
 
+        -- Check overhead Billboard Labels
         local billboardText = ""
         for _, lbl in ipairs(obj:GetDescendants()) do
-            if lbl:IsA("TextLabel") and lbl.Text ~= "" and not isBlacklisted(lbl.Text) then
+            if lbl:IsA("TextLabel") and lbl.Text ~= "" and not isJunkName(lbl.Text) then
                 billboardText = billboardText .. " " .. string.lower(lbl.Text)
                 if string.find(string.lower(lbl.Text), "egg") then
-                    isEgg = true
+                    isRealEgg = true
                     rawName = lbl.Text
                     lowerName = string.lower(rawName)
                 end
             end
         end
 
-        if not isEgg then return nil end
+        if not isRealEgg and string.find(lowerName, "egg") then
+            isRealEgg = true
+        end
 
-        local foundTier = "Common"
-        local foundRank = 1
-        local foundColor = Color3.fromRGB(200, 200, 200)
+        if not isRealEgg then return nil end
+
+        -- Identify Rarity Tier
+        local foundTier = nil
+        local foundRank = 0
+        local foundColor = nil
 
         local combined = lowerName .. " " .. promptText .. " " .. billboardText
         for key, data in pairs(RARITY_RANKS) do
@@ -214,8 +277,18 @@ local function loadMainHub()
             end
         end
 
+        -- STRICT FILTER: REJECT COMMON OR UNRANKED JUNK
+        if not foundTier or foundRank < 3 then
+            return nil
+        end
+
         local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart")
         if not part or isInsideMyBase(part.Position) then return nil end
+
+        -- Clean formatted name
+        rawName = string.gsub(rawName, "Meshes/.*", "")
+        rawName = string.gsub(rawName, "%.%d+", "")
+        rawName = string.match(rawName, "^%s*(.-)%s*$") or rawName
 
         return {
             Object = obj,
@@ -227,7 +300,7 @@ local function loadMainHub()
         }
     end
 
-    local function scanAllEggs()
+    local function scanCleanRareEggs()
         local results = {}
         local seen = {}
         local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -251,7 +324,7 @@ local function loadMainHub()
     end
 
     -- =======================================================
-    -- INSTANT STEAL & RETURN
+    -- FAST STEAL & RETURN
     -- =======================================================
     local isStealing = false
     local autoSteal = false
@@ -264,14 +337,13 @@ local function loadMainHub()
         isStealing = true
         local home = getMyBasePos()
 
-        if antiGuardEnabled then
-            sleepGuards()
-        end
+        -- Always freeze boss during steal
+        freezeAllBossesAndGuards()
 
         stabilize()
         root.CFrame = eggData.Part.CFrame * CFrame.new(0, 3, 0)
         stabilize()
-        task.wait(0.1)
+        task.wait(0.08)
 
         local prompt = eggData.Object:FindFirstChildWhichIsA("ProximityPrompt", true)
         if prompt then
@@ -296,8 +368,8 @@ local function loadMainHub()
         stabilize()
         root.CFrame = CFrame.new(home + Vector3.new(0, 5, 0))
         stabilize()
-        notify("Steal Success!", "Delivered " .. eggData.Name .. " to Nest!")
-        task.wait(0.5)
+        notify("Steal Success!", "Delivered " .. eggData.Name .. " safely to Base!")
+        task.wait(0.4)
         isStealing = false
     end
 
@@ -305,7 +377,7 @@ local function loadMainHub()
     task.spawn(function()
         while true do
             if autoSteal and not isStealing then
-                local eggs = scanAllEggs()
+                local eggs = scanCleanRareEggs()
                 for _, egg in ipairs(eggs) do
                     if egg.Rank >= 5 and not isInsideMyBase(egg.Part.Position) then
                         instantStealAndReturn(egg)
@@ -318,7 +390,7 @@ local function loadMainHub()
         end
     end)
 
-    -- Movement Engine
+    -- Movement Settings
     local speedEnabled = false
     local currentSpeed = 500
     local speedConn
@@ -409,7 +481,7 @@ local function loadMainHub()
         mainFrame.Visible = not mainFrame.Visible
     end)
 
-    -- Header Bar
+    -- Top Header Bar
     local topBar = Instance.new("Frame")
     topBar.Size = UDim2.new(1, 0, 0, 32)
     topBar.BackgroundColor3 = CHILLI.ColumnBg
@@ -675,22 +747,16 @@ local function loadMainHub()
     end
 
     -- =======================================================
-    -- PAGE: EGGS (ANTIGUARD + LIVE RADAR + FAST STEAL)
+    -- PAGE: EGGS (ANTIGUARD + CLEAN RARE-ONLY RADAR)
     -- =======================================================
-    local eggGuardCard = createCategoryCard(pEggs, "Guard Protection & Steal")
+    local eggGuardCard = createCategoryCard(pEggs, "Boss Sleep & Protection")
 
-    -- AntiGuard Toggle with Sleep/Shield Icon
-    addCardToggle(eggGuardCard, "AntiGuard (Sleep Guard/Boss)", false, function(on)
-        antiGuardEnabled = on
-        if on then
-            sleepGuards()
-            notify("AntiGuard Active", "Bosses & Guards are now asleep / frozen!")
-        else
-            notify("AntiGuard Disabled", "Guards restored.")
-        end
+    -- AntiGuard Toggle: Locks boss in sleep/ragdoll
+    addCardToggle(eggGuardCard, "AntiGuard (Freeze Boss / Sleep)", false, function(on)
+        toggleAntiGuard(on)
     end, "💤")
 
-    addCardToggle(eggGuardCard, "Auto Steal Rares (Instant Base Return)", false, function(on)
+    addCardToggle(eggGuardCard, "Auto Steal High Rarity (Instant Return)", false, function(on)
         autoSteal = on
         if on then notify("Auto Steal", "Active! Waiting for Secret/Eternal/Divine spawns...") end
     end, "⚡")
@@ -704,7 +770,7 @@ local function loadMainHub()
         end
     end)
 
-    local radarContainer = createCategoryCard(pEggs, "Live Spawned Eggs (All Zones)")
+    local radarContainer = createCategoryCard(pEggs, "Rare Spawn Radar (Secret/Eternal/Divine)")
 
     local function refreshRadarDisplay()
         for _, child in ipairs(radarContainer:GetChildren()) do
@@ -713,13 +779,13 @@ local function loadMainHub()
             end
         end
 
-        local eggs = scanAllEggs()
+        local eggs = scanCleanRareEggs()
 
         if #eggs == 0 then
             local empty = Instance.new("TextLabel")
             empty.Size = UDim2.new(0.94, 0, 0, 32)
             empty.BackgroundTransparency = 1
-            empty.Text = "No unowned eggs in map/zones. Watching for spawns..."
+            empty.Text = "No rare eggs spotted outside your nest. Tap to refresh!"
             empty.TextColor3 = CHILLI.TextSecondary
             empty.Font = Enum.Font.Gotham
             empty.TextSize = 10
