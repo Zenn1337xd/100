@@ -1,7 +1,7 @@
 -- =======================================================
--- Kevan Hub | Steal an Egg (Chilli Edition)
+-- Kevan Hub | Steal an Egg (Chilli Edition + AntiGuard)
 -- Owned by kevan#9999
--- Fixed Live Egg Radar + Instant Fast Steal & Return + Key System
+-- Key: KevanGen | AntiGuard (Sleep NPC/Boss) + Live Steal Radar
 -- =======================================================
 
 local Players = game:GetService("Players")
@@ -15,7 +15,7 @@ local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 player.CharacterAdded:Connect(function(char) character = char end)
 
--- Safe UI Container
+-- UI Container setup
 local targetParent = nil
 pcall(function() targetParent = CoreGui end)
 if not targetParent then targetParent = player:WaitForChild("PlayerGui") end
@@ -38,7 +38,7 @@ local function notify(title, text)
 end
 
 -- =======================================================
--- MAIN HUB SYSTEM (RUNS AFTER CORRECT KEY)
+-- MAIN HUB SYSTEM
 -- =======================================================
 local function loadMainHub()
     local CHILLI = {
@@ -104,7 +104,49 @@ local function loadMainHub()
     end
 
     -- =======================================================
-    -- ENHANCED EGG DETECTOR & MULTI-ZONE SCANNER
+    -- ANTIGUARD (SLEEP GUARDS & FREEZE BOSSES)
+    -- =======================================================
+    local antiGuardEnabled = false
+
+    local function sleepGuards()
+        for _, npc in ipairs(workspace:GetDescendants()) do
+            if npc:IsA("Humanoid") and not Players:GetPlayerFromCharacter(npc.Parent) then
+                pcall(function()
+                    local model = npc.Parent
+                    npc.PlatformStand = true
+                    npc.WalkSpeed = 0
+
+                    local hrp = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChildWhichIsA("BasePart")
+                    if hrp then
+                        hrp.Anchored = true
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                    end
+
+                    for _, part in ipairs(model:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            local pName = string.lower(part.Name)
+                            if string.find(pName, "hitbox") or string.find(pName, "attack") or string.find(pName, "damage") then
+                                part.CanTouch = false
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+    end
+
+    -- AntiGuard Monitor Loop
+    task.spawn(function()
+        while true do
+            if antiGuardEnabled then
+                sleepGuards()
+            end
+            task.wait(1)
+        end
+    end)
+
+    -- =======================================================
+    -- EGG DETECTOR & MULTI-ZONE SCANNER
     -- =======================================================
     local RARITY_RANKS = {
         ["secret"]    = {Tier = "Secret", Rank = 10, Color = Color3.fromRGB(0, 255, 210)},
@@ -143,7 +185,6 @@ local function loadMainHub()
             lowerName = string.lower(rawName)
         end
 
-        -- Check overhead labels inside egg
         local billboardText = ""
         for _, lbl in ipairs(obj:GetDescendants()) do
             if lbl:IsA("TextLabel") and lbl.Text ~= "" and not isBlacklisted(lbl.Text) then
@@ -158,7 +199,6 @@ local function loadMainHub()
 
         if not isEgg then return nil end
 
-        -- Match Highest Rarity Tier
         local foundTier = "Common"
         local foundRank = 1
         local foundColor = Color3.fromRGB(200, 200, 200)
@@ -203,7 +243,6 @@ local function loadMainHub()
             end
         end
 
-        -- Sort rarest (Secret / Eternal / Divine) first
         table.sort(results, function(a, b)
             if a.Rank ~= b.Rank then return a.Rank > b.Rank end
             return a.Distance < b.Distance
@@ -212,7 +251,7 @@ local function loadMainHub()
     end
 
     -- =======================================================
-    -- INSTANT FAST STEAL & RETURN PIPELINE
+    -- INSTANT STEAL & RETURN
     -- =======================================================
     local isStealing = false
     local autoSteal = false
@@ -224,14 +263,16 @@ local function loadMainHub()
 
         isStealing = true
         local home = getMyBasePos()
-        stabilize()
 
-        -- 1. Fast Teleport directly above egg
+        if antiGuardEnabled then
+            sleepGuards()
+        end
+
+        stabilize()
         root.CFrame = eggData.Part.CFrame * CFrame.new(0, 3, 0)
         stabilize()
         task.wait(0.1)
 
-        -- 2. Trigger Fast Grab
         local prompt = eggData.Object:FindFirstChildWhichIsA("ProximityPrompt", true)
         if prompt then
             if fireproximityprompt then
@@ -252,22 +293,20 @@ local function loadMainHub()
         end
         task.wait(0.2)
 
-        -- 3. Instant Return to Base Nest / Safe Zone
         stabilize()
         root.CFrame = CFrame.new(home + Vector3.new(0, 5, 0))
         stabilize()
-        notify("Steal Success!", "Brought " .. eggData.Name .. " back to Nest!")
+        notify("Steal Success!", "Delivered " .. eggData.Name .. " to Nest!")
         task.wait(0.5)
         isStealing = false
     end
 
-    -- Auto Steal Loop for newly spawned eggs
+    -- Auto Steal Loop
     task.spawn(function()
         while true do
             if autoSteal and not isStealing then
                 local eggs = scanAllEggs()
                 for _, egg in ipairs(eggs) do
-                    -- Prioritize Secret, Eternal, Divine, Mythic, Legendary
                     if egg.Rank >= 5 and not isInsideMyBase(egg.Part.Position) then
                         instantStealAndReturn(egg)
                         task.wait(1)
@@ -279,7 +318,7 @@ local function loadMainHub()
         end
     end)
 
-    -- Speed & Jump Engine
+    -- Movement Engine
     local speedEnabled = false
     local currentSpeed = 500
     local speedConn
@@ -412,7 +451,7 @@ local function loadMainHub()
     Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 4)
     closeBtn.MouseButton1Click:Connect(function() mainFrame.Visible = false end)
 
-    -- Column 1: Left Navigation Tabs
+    -- Column 1: Left Navigation
     local leftCol = Instance.new("Frame")
     leftCol.Size = UDim2.new(0, 110, 1, -38)
     leftCol.Position = UDim2.new(0, 6, 0, 35)
@@ -427,7 +466,7 @@ local function loadMainHub()
     local leftPadding = Instance.new("UIPadding", leftCol)
     leftPadding.PaddingTop = UDim.new(0, 6)
 
-    -- Column 3: Right Utility Tabs
+    -- Column 3: Right Utility
     local rightCol = Instance.new("Frame")
     rightCol.Size = UDim2.new(0, 100, 1, -38)
     rightCol.Position = UDim2.new(1, -106, 0, 35)
@@ -442,7 +481,7 @@ local function loadMainHub()
     local rightPadding = Instance.new("UIPadding", rightCol)
     rightPadding.PaddingTop = UDim.new(0, 6)
 
-    -- Column 2: Center Content Area
+    -- Column 2: Center Viewport
     local centerCol = Instance.new("Frame")
     centerCol.Size = UDim2.new(1, -228, 1, -38)
     centerCol.Position = UDim2.new(0, 120, 0, 35)
@@ -458,7 +497,7 @@ local function loadMainHub()
         scroll.ScrollBarThickness = 2
         scroll.ScrollBarImageColor3 = CHILLI.RedAccent
         scroll.Visible = false
-        scroll.CanvasSize = UDim2.new(0, 0, 0, 340)
+        scroll.CanvasSize = UDim2.new(0, 0, 0, 350)
         scroll.Parent = centerCol
 
         local layout = Instance.new("UIListLayout", scroll)
@@ -501,23 +540,19 @@ local function loadMainHub()
         return btn
     end
 
-    -- Left Navigation Tabs
     local tOpt    = createTabBtn(leftCol, "Optimizer", "Optimizer")
     local tPlayer = createTabBtn(leftCol, "Player", "Player")
     local tEggs   = createTabBtn(leftCol, "Eggs", "Eggs")
     local tServer = createTabBtn(leftCol, "Server", "Settings")
 
-    -- Right Navigation Tabs
     local tDisc   = createTabBtn(rightCol, "Discord", "Settings")
     local tKeys   = createTabBtn(rightCol, "Quick Keys", "Player")
     local tSett   = createTabBtn(rightCol, "Settings", "Settings")
 
-    -- Default to Eggs Page
     pEggs.Visible = true
     tEggs.BackgroundColor3 = CHILLI.RedAccent
     tEggs.TextColor3 = CHILLI.TextPrimary
 
-    -- Category Card Constructors
     local function createCategoryCard(parent, headerTitle)
         local card = Instance.new("Frame")
         card.Size = UDim2.new(0.96, 0, 0, 30)
@@ -569,7 +604,7 @@ local function loadMainHub()
         return list
     end
 
-    local function addCardToggle(container, labelText, defaultState, callback)
+    local function addCardToggle(container, labelText, defaultState, callback, iconSymbol)
         local state = defaultState
         local row = Instance.new("Frame")
         row.Size = UDim2.new(0.94, 0, 0, 28)
@@ -577,9 +612,21 @@ local function loadMainHub()
         row.Parent = container
         Instance.new("UICorner", row).CornerRadius = UDim.new(0, 4)
 
+        local xOffset = 8
+        if iconSymbol then
+            local icn = Instance.new("TextLabel")
+            icn.Size = UDim2.new(0, 20, 1, 0)
+            icn.Position = UDim2.new(0, 6, 0, 0)
+            icn.BackgroundTransparency = 1
+            icn.Text = iconSymbol
+            icn.TextSize = 13
+            icn.Parent = row
+            xOffset = 28
+        end
+
         local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(0.7, 0, 1, 0)
-        lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.Size = UDim2.new(0.65, 0, 1, 0)
+        lbl.Position = UDim2.new(0, xOffset, 0, 0)
         lbl.BackgroundTransparency = 1
         lbl.Text = labelText
         lbl.TextColor3 = CHILLI.TextPrimary
@@ -628,14 +675,27 @@ local function loadMainHub()
     end
 
     -- =======================================================
-    -- PAGE: EGGS (LIVE RADAR + INSTANT STEAL)
+    -- PAGE: EGGS (ANTIGUARD + LIVE RADAR + FAST STEAL)
     -- =======================================================
-    local autoCard = createCategoryCard(pEggs, "Auto Steal On Spawn")
-    addCardToggle(autoCard, "Auto Steal High Rarity (Instant Return)", false, function(on)
+    local eggGuardCard = createCategoryCard(pEggs, "Guard Protection & Steal")
+
+    -- AntiGuard Toggle with Sleep/Shield Icon
+    addCardToggle(eggGuardCard, "AntiGuard (Sleep Guard/Boss)", false, function(on)
+        antiGuardEnabled = on
+        if on then
+            sleepGuards()
+            notify("AntiGuard Active", "Bosses & Guards are now asleep / frozen!")
+        else
+            notify("AntiGuard Disabled", "Guards restored.")
+        end
+    end, "💤")
+
+    addCardToggle(eggGuardCard, "Auto Steal Rares (Instant Base Return)", false, function(on)
         autoSteal = on
-        if on then notify("Auto Steal", "Active! Waiting for Secret/Eternal/Divine eggs...") end
-    end)
-    addCardButton(autoCard, "🏠 Return to Nest / Safe Zone", function()
+        if on then notify("Auto Steal", "Active! Waiting for Secret/Eternal/Divine spawns...") end
+    end, "⚡")
+
+    addCardButton(eggGuardCard, "🏠 Return to Nest / Safe Zone", function()
         if character and character:FindFirstChild("HumanoidRootPart") then
             stabilize()
             character.HumanoidRootPart.CFrame = CFrame.new(getMyBasePos() + Vector3.new(0, 5, 0))
@@ -667,7 +727,7 @@ local function loadMainHub()
             return
         end
 
-        pEggs.CanvasSize = UDim2.new(0, 0, 0, 120 + (#eggs * 46))
+        pEggs.CanvasSize = UDim2.new(0, 0, 0, 160 + (#eggs * 46))
 
         for _, data in ipairs(eggs) do
             local row = Instance.new("Frame")
@@ -722,7 +782,6 @@ local function loadMainHub()
 
     refreshRadarDisplay()
 
-    -- Live Auto-Updater for Eggs (Refreshes dynamically every 2.5s)
     task.spawn(function()
         while true do
             if pEggs.Visible then
@@ -735,7 +794,7 @@ local function loadMainHub()
     -- =======================================================
     -- PAGE: PLAYER
     -- =======================================================
-    local playerCard = createCategoryCard(pPlayer, "Movement & Presets")
+    local playerCard = createCategoryCard(pPlayer, "Movement & Speed")
 
     local speedBox = Instance.new("Frame")
     speedBox.Size = UDim2.new(0.94, 0, 0, 55)
